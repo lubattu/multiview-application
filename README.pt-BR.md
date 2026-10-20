@@ -1,7 +1,7 @@
 # PokeIdle Multiview
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/ryuuft/multiview-application)](../../releases)
+[![Release](https://img.shields.io/github/v/release/ryuuft/multiview-application?v=1.5.0)](../../releases)
 [![CI](https://github.com/ryuuft/multiview-application/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
 [English](README.md) | **Português (Brasil)**
