@@ -1,0 +1,15 @@
+appId: com.pokeidle.multiview
+productName: PokeIdleMultiview
+directories:
+  output: release
+files:
+  - src/**/*
+  - package.json
+  - resources/icon.ico
+win:
+  icon: resources/icon.ico
+  artifactName: PokeIdleMultiview.exe
+  target:
+    - target: portable
+      arch:
+        - x64

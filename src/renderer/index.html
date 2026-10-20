@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <!-- style-src 'unsafe-inline': Electron's <webview> injects ':host { display: flex; }' and
+       inline iframe styles on attach; without it webviews collapse to display:inline strips. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src app: 'self'; style-src app: 'self' 'unsafe-inline'">
+  <title>PokeIdle Multiview</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header id="toolbar">
+    <button id="add-slot" title="Adicionar slot (máximo de 4)">+ Slot</button>
+    <div id="chips"></div>
+    <div class="toolbar-right">
+      <label id="auto-reload-wrap" title="Recarrega todas as páginas no intervalo escolhido (para pegar atualizações do jogo)">
+        <span>Auto-recarga</span>
+        <select id="auto-reload"></select>
+      </label>
+      <div id="zoom-controls" class="hidden">
+        <button id="zoom-out" title="Reduzir zoom">−</button>
+        <span id="zoom-value">100%</span>
+        <button id="zoom-in" title="Aumentar zoom">+</button>
+        <button id="zoom-reset" title="Redefinir zoom (100%)">⟲</button>
+      </div>
+      <div id="mode-toggle">
+        <button id="mode-grid" class="active">Grade</button>
+        <button id="mode-focus">Foco</button>
+      </div>
+      <button id="settings-btn" title="Configurações">⚙</button>
+      <span id="credit">Developed by ryuuft</span>
+    </div>
+    <div id="settings-pop" class="hidden">
+      <label class="settings-row">
+        <input type="checkbox" id="set-keep-awake">
+        <span>Manter o PC acordado enquanto houver streams ativas</span>
+      </label>
+      <label class="settings-row">
+        <input type="checkbox" id="set-low-quality">
+        <span>Forçar qualidade mínima nas streams em segundo plano</span>
+      </label>
+      <label class="settings-row">
+        <span>Ao fechar a janela (×)</span>
+        <select id="set-close-tray">
+          <option value="streams">Ir para a bandeja se houver streams</option>
+          <option value="always">Sempre ir para a bandeja</option>
+          <option value="never">Encerrar o app</option>
+        </select>
+      </label>
+      <p class="settings-hint">"Encerrar de verdade" fica no ícone da bandeja, perto do relógio.</p>
+    </div>
+  </header>
+  <main id="panels"></main>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>

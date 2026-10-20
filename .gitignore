@@ -1,0 +1,7 @@
+node_modules/
+release/
+release-build/
+release-v*/
+resources/
+.superpowers/
+.zcode/
