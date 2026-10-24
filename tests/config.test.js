@@ -9,6 +9,7 @@ import {
   normalizeKickChannel,
   twitchLoginFromUrl,
   kickLoginFromUrl,
+  streamPlayerUrl,
 } from '../src/shared/config.js';
 
 describe('defaultConfig', () => {
@@ -19,6 +20,7 @@ describe('defaultConfig', () => {
       closeToTray: 'streams',
       keepAwake: true,
       lowQuality: true,
+      lightMode: false,
       slots: [{ id: 1, name: 'Conta 1', zoom: 100, muted: false, twitchChannels: [], kickChannels: [] }],
       layout: { mode: 'grid', focusSlotId: 1, gridSplit: { v: 50, h: 50 }, focusSplit: 70 },
       window: { width: 1600, height: 900, maximized: false },
@@ -59,6 +61,13 @@ describe('normalizeConfig', () => {
     expect(normalizeConfig({ keepAwake: false }).keepAwake).toBe(false);
     expect(normalizeConfig({ keepAwake: 'sim' }).keepAwake).toBe(true);
     expect(normalizeConfig({ lowQuality: false }).lowQuality).toBe(false);
+  });
+
+  it('modo leve é opt-in: só booleano true liga', () => {
+    expect(normalizeConfig({}).lightMode).toBe(false);
+    expect(normalizeConfig({ lightMode: true }).lightMode).toBe(true);
+    expect(normalizeConfig({ lightMode: 'sim' }).lightMode).toBe(false);
+    expect(normalizeConfig({ lightMode: 1 }).lightMode).toBe(false);
   });
 
   it('zoom fora de faixa é clampado e ajustado ao passo de 10', () => {
@@ -194,6 +203,14 @@ describe('normalizeTwitchChannel / twitchLoginFromUrl', () => {
     expect(twitchLoginFromUrl('https://www.twitch.tv/downloads')).toBe('');
   });
 
+  it('twitchLoginFromUrl extrai o canal do player de popout', () => {
+    expect(twitchLoginFromUrl('https://www.twitch.tv/popout/somechan/player')).toBe('somechan');
+    expect(twitchLoginFromUrl('https://twitch.tv/popout/Canal_X/player')).toBe('canal_x');
+    expect(twitchLoginFromUrl('https://www.twitch.tv/popout/somechan/chat')).toBe('somechan');
+    expect(twitchLoginFromUrl('https://www.twitch.tv/popout/directory/player')).toBe('');
+    expect(twitchLoginFromUrl('https://www.twitch.tv/popout')).toBe('');
+  });
+
   it('twitchLoginFromUrl retorna vazio para hosts externos e entradas inválidas', () => {
     expect(twitchLoginFromUrl('https://youtube.com/somechan')).toBe('');
     expect(twitchLoginFromUrl('https://evil.com/twitch.tv/somechan')).toBe('');
@@ -224,11 +241,30 @@ describe('normalizeKickChannel / kickLoginFromUrl', () => {
     expect(kickLoginFromUrl('https://kick.com/terms-of-service')).toBe('');
   });
 
+  it('kickLoginFromUrl extrai o canal do player de embed (player.kick.com)', () => {
+    expect(kickLoginFromUrl('https://player.kick.com/canalkick')).toBe('canalkick');
+    expect(kickLoginFromUrl('https://player.kick.com/Canal_Kick/')).toBe('canal_kick');
+    expect(kickLoginFromUrl('https://player.kick.com/browse')).toBe('');
+  });
+
   it('kickLoginFromUrl retorna vazio para hosts externos e entradas inválidas', () => {
     expect(kickLoginFromUrl('https://twitch.tv/somechan')).toBe('');
     expect(kickLoginFromUrl('https://evil.com/kick.com/chan')).toBe('');
     expect(kickLoginFromUrl('não é URL')).toBe('');
     expect(kickLoginFromUrl(null)).toBe('');
+  });
+});
+
+describe('streamPlayerUrl', () => {
+  it('monta o player leve de cada plataforma e rejeita plataforma desconhecida', () => {
+    expect(streamPlayerUrl('twitch', 'somechan')).toBe('https://www.twitch.tv/popout/somechan/player');
+    expect(streamPlayerUrl('kick', 'canal_kick')).toBe('https://player.kick.com/canal_kick');
+    expect(streamPlayerUrl('youtube', 'somechan')).toBe(null);
+  });
+
+  it('as URLs leves são reconhecidas pelos parsers de login', () => {
+    expect(twitchLoginFromUrl(streamPlayerUrl('twitch', 'somechan'))).toBe('somechan');
+    expect(kickLoginFromUrl(streamPlayerUrl('kick', 'canal_kick'))).toBe('canal_kick');
   });
 });
 

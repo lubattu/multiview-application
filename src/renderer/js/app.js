@@ -24,6 +24,7 @@ const els = {
   setKeepAwake: document.getElementById('set-keep-awake'),
   setLowQuality: document.getElementById('set-low-quality'),
   setCloseTray: document.getElementById('set-close-tray'),
+  setLightMode: document.getElementById('set-light-mode'),
 };
 
 const state = {
@@ -31,10 +32,41 @@ const state = {
   gameSlots: new Map(),
   saveTimer: null,
   autoReloadTimer: null,
+  lightStatus: null,      // push do main: { slots, fallbackTwitch, fallbackKick, capturing }
 };
 
 const selectedId = () => state.config.layout.focusSlotId;
 const slotConfig = (id) => state.config.slots.find((s) => s.id === id);
+
+// Modo leve POR plataforma: config ligada E a plataforma da aba não caiu no
+// fallback (captura de token da Twitch falhou → twitch dela volta a webview,
+// enquanto o kick da mesma aba continua headless).
+function slotLightPlatforms(id) {
+  const light = state.config.lightMode === true;
+  const fallbackTwitch = state.lightStatus?.fallbackTwitch ?? [];
+  const fallbackKick = state.lightStatus?.fallbackKick ?? [];
+  return {
+    twitch: light && !fallbackTwitch.includes(id),
+    kick: light && !fallbackKick.includes(id),
+  };
+}
+
+// syncSlots NÃO recria aba existente (só cria/destroi pelo id da config); mudanças
+// de modo precisam desmontar e recriar o GameSlot de verdade.
+function rebuildSlot(id) {
+  const gameSlot = state.gameSlots.get(id);
+  if (!gameSlot) {
+    syncSlots();
+    return;
+  }
+  gameSlot.unmount();
+  state.gameSlots.delete(id);
+  syncSlots();
+}
+
+function rebuildAllSlots() {
+  for (const id of [...state.gameSlots.keys()]) rebuildSlot(id);
+}
 
 function scheduleSave() {
   clearTimeout(state.saveTimer);
@@ -117,6 +149,7 @@ function sendPanelToBackground(id) {
     if (!list.includes(result.login) && list.length < LIMITS.maxStreams) list.push(result.login);
     scheduleSave();
   }
+  gameSlot.updateStreamsBar();
   renderChips();
 }
 
@@ -132,6 +165,7 @@ function removeStream(id, platform, login) {
   gameSlot.closeStream(platform, login);
   const key = channelsKey(platform);
   slot[key] = slot[key].filter((c) => c !== login);
+  gameSlot.updateStreamsBar();
   renderChips();
   scheduleSave();
 }
@@ -146,6 +180,7 @@ function closeAllStreams(id) {
     gameSlot.closeAllStreams(platform);
     slot[channelsKey(platform)] = [];
   }
+  gameSlot.updateStreamsBar();
   renderChips();
   scheduleSave();
 }
@@ -160,6 +195,7 @@ function showStreamInPanel(id, platform, login) {
   gameSlot.openStreamInPanel(platform, login);
   const key = channelsKey(platform);
   slot[key] = slot[key].filter((c) => c !== login);
+  gameSlot.updateStreamsBar();
   renderChips();
   scheduleSave();
 }
@@ -201,6 +237,7 @@ function syncSlots() {
         onStreamRemove: removeStream,
         onStreamsCloseAll: closeAllStreams,
         onStreamShow: showStreamInPanel,
+        lightPlatforms: slotLightPlatforms(slot.id),
       });
       els.panels.appendChild(gameSlot.root);
       state.gameSlots.set(slot.id, gameSlot);
@@ -272,6 +309,22 @@ function renderChips() {
     const gameSlot = state.gameSlots.get(s.id);
     const broken = gameSlot?.brokenStreams() ?? [];
     const namesFor = (platform) => broken.filter((b) => b.platform === platform).map((b) => b.login);
+    // Modo leve: a saúde vem do push do main. Twitch é um socket por aba — falha
+    // nele marca todos os canais twitch do segundo plano da aba.
+    const lightPlatforms = slotLightPlatforms(s.id);
+    const light = state.lightStatus?.slots?.[s.id];
+    const lightNamesFor = (platform) => {
+      if (!lightPlatforms[platform] || !light) return [];
+      if (platform === 'twitch' && light.twitch && !light.twitch.ok) {
+        return s.twitchChannels;
+      }
+      if (platform === 'kick' && light.kick) {
+        return s.kickChannels.filter((login) => light.kick[login] && !light.kick[login].ok);
+      }
+      return [];
+    };
+    const capturing = (state.lightStatus?.capturing ?? []).includes(s.id)
+      && lightPlatforms.twitch && s.twitchChannels.length > 0;
     return {
       id: s.id,
       name: s.name,
@@ -280,10 +333,11 @@ function renderChips() {
       selected: s.id === selectedId(),
       twitchStreams: s.twitchChannels.length,
       kickStreams: s.kickChannels.length,
-      twitchBroken: namesFor('twitch'),
-      kickBroken: namesFor('kick'),
+      twitchBroken: [...new Set([...namesFor('twitch'), ...lightNamesFor('twitch')])],
+      kickBroken: [...new Set([...namesFor('kick'), ...lightNamesFor('kick')])],
       twitchPanel: gameSlot?.isPanelOpen('twitch') ?? false,
       kickPanel: gameSlot?.isPanelOpen('kick') ?? false,
+      lightCapturing: capturing,
     };
   });
   renderChipsInto(els.chips, chips, {
@@ -381,6 +435,7 @@ function syncSettingsControls() {
   els.setKeepAwake.checked = state.config.keepAwake;
   els.setLowQuality.checked = state.config.lowQuality;
   els.setCloseTray.value = state.config.closeToTray;
+  els.setLightMode.checked = state.config.lightMode;
 }
 
 function boot() {
@@ -406,6 +461,35 @@ function boot() {
   els.setCloseTray.addEventListener('change', () => {
     state.config.closeToTray = els.setCloseTray.value;
     scheduleSave();
+  });
+  els.setLightMode.addEventListener('change', () => {
+    state.config.lightMode = els.setLightMode.checked;
+    scheduleSave();
+    // Reconstrói TODAS as abas de verdade (syncSlots sozinho não recria as
+    // existentes): light = sem webviews de fundo; normal = boot queue recria.
+    rebuildAllSlots();
+    renderAll();
+  });
+  window.poke.onLightStatus((payload) => {
+    state.lightStatus = payload ?? null;
+    // Fallback mudou para alguma aba/plataforma → reconstrói SÓ essas abas
+    // (webviews voltam na plataforma em fallback; as demais continuam leves).
+    const affected = state.config.slots
+      .filter((s) => {
+        const target = slotLightPlatforms(s.id);
+        const gameSlot = state.gameSlots.get(s.id);
+        if (!gameSlot) return false;
+        return target.twitch !== gameSlot.isLight('twitch')
+          || target.kick !== gameSlot.isLight('kick');
+      })
+      .map((s) => s.id);
+    if (affected.length > 0) {
+      for (const id of affected) rebuildSlot(id);
+      renderAll();
+      return;
+    }
+    renderChips();
+    for (const gameSlot of state.gameSlots.values()) gameSlot.updateStreamsBar();
   });
   els.addSlot.addEventListener('click', addSlot);
   els.zoomOut.addEventListener('click', () => {

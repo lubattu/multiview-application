@@ -59,11 +59,13 @@ export class TwitchIrcRunner {
     nickFactory = anonNick, // injetável para testes determinísticos
     joinGapMs = JOIN_GAP_MS,
     reconnectMs = RECONNECT_MS,
+    onAuthFailed = () => {},
     log = () => {},
   } = {}) {
     this.channels = normalizeChannelList(channels);
     this.socketFactory = socketFactory;
     this.credentials = normalizeCredentials(credentials);
+    this.onAuthFailed = onAuthFailed;
     this.nickFactory = nickFactory;
     this.joinGapMs = joinGapMs;
     this.reconnectMs = reconnectMs;
@@ -201,6 +203,7 @@ export class TwitchIrcRunner {
           }
           if (line.includes('Login authentication failed')) {
             this.recordError('autenticação recusada pela Twitch (token inválido ou expirado)');
+            this.onAuthFailed();
             continue;
           }
           // Confirmação do nosso JOIN: ":<nick>!... JOIN #canal". JOINs de outros

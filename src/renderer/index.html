@@ -40,6 +40,10 @@
         <span>Forçar qualidade mínima nas streams em segundo plano</span>
       </label>
       <label class="settings-row">
+        <input type="checkbox" id="set-light-mode">
+        <span>Modo leve (segundo plano sem vídeo)</span>
+      </label>
+      <label class="settings-row">
         <span>Ao fechar a janela (×)</span>
         <select id="set-close-tray">
           <option value="streams">Ir para a bandeja se houver streams</option>
@@ -47,7 +51,7 @@
           <option value="never">Encerrar o app</option>
         </select>
       </label>
-      <p class="settings-hint">"Encerrar de verdade" fica no ícone da bandeja, perto do relógio.</p>
+      <p class="settings-hint">Modo leve: os canais de segundo plano viram presença invisível (sem vídeo), com muito menos CPU/RAM — o bônus continua contando. Se algo falhar numa aba, ela volta ao modo normal sozinha. "Encerrar de verdade" fica no ícone da bandeja, perto do relógio.</p>
     </div>
   </header>
   <main id="panels"></main>

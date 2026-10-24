@@ -4,6 +4,9 @@ import fs from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { normalizeConfig, defaultConfig, LIMITS, isTwitchHost, isKickHost, twitchLoginFromUrl, kickLoginFromUrl } from '../shared/config.js';
 import { resolveHuntExtensionDir } from './extensions.js';
+import { HeadlessStreamManager } from './headless-streams.js';
+import { attachIrcCapture, captureViaHiddenWindow } from './twitch-capture.js';
+import { createCaptureCoordinator } from './capture-coordinator.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ALLOWED_HOSTS = new Set(['pokeidle.io', 'www.pokeidle.io']);
@@ -18,6 +21,15 @@ let currentConfig = defaultConfig();
 let powerBlockerId = null;
 let appIsQuitting = false;
 let trayHintShown = false;
+
+// ── Modo leve (presença headless no processo main) ──────────────────────────
+let lightManager = null;
+let lightStatusTimer = null;
+let lightStatusPushTimer = null;
+let lightSyncChain = Promise.resolve(); // serializa syncLightMode (evita interleave)
+let captureCoordinator = null;
+const twitchCredentialsBySlot = new Map(); // slotId → { nick, token } (só memória)
+const ircCaptureAttached = new WeakSet();  // webviews já com escuta oportunista
 
 const totalStreamCount = (config) =>
   (config.slots ?? []).reduce((total, slot) => total + (slot.twitchChannels?.length ?? 0) + (slot.kickChannels?.length ?? 0), 0);
@@ -89,6 +101,164 @@ function updateRuntimeBehaviors(config) {
     powerSaveBlocker.stop(powerBlockerId);
     powerBlockerId = null;
   }
+  syncLightMode().catch((error) => console.error('[light] falha ao reconciliar:', error));
+}
+
+// ── Modo leve: engine ────────────────────────────────────────────────────────
+
+function ensureLightManager() {
+  if (lightManager) return lightManager;
+  captureCoordinator = createCaptureCoordinator({
+    onFallback: (slotId) => {
+      console.log(`[light] slot ${slotId}: twitch volta a webview (fallback)`);
+      pushLightStatus();
+    },
+    onRecovery: (slotId) => {
+      console.log(`[light] slot ${slotId}: token novo recuperou a aba do fallback`);
+      pushLightStatus();
+    },
+  });
+  lightManager = new HeadlessStreamManager({
+    onStatus: () => scheduleLightStatusPush(),
+    onTwitchAuthFailed: (slotId) => {
+      // Token recusado conta rodada falha: a recaptura pode devolver o MESMO token
+      // (sessão vencida) — sem contar, capturar ↔ recusar não termina nunca.
+      twitchCredentialsBySlot.delete(slotId);
+      captureCoordinator.reportAuthRefused(slotId);
+      syncLightMode().catch(() => {});
+    },
+    log: (message) => console.log(message),
+  });
+  return lightManager;
+}
+
+async function kickCookieFor(slotId) {
+  try {
+    const cookies = await session.fromPartition(`persist:slot-${slotId}`).cookies.get({ url: 'https://kick.com' });
+    if (!cookies.length) return null;
+    return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+  } catch {
+    return null;
+  }
+}
+
+function lightStatusPayload() {
+  return {
+    slots: lightManager?.statusSnapshot() ?? {},
+    fallbackTwitch: captureCoordinator?.fallbackSlots() ?? [],
+    fallbackKick: [],
+    capturing: captureCoordinator?.capturingSlots() ?? [],
+  };
+}
+
+function pushLightStatus() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    mainWindow.webContents.send('light:status', lightStatusPayload());
+  } catch {}
+}
+
+function scheduleLightStatusPush() {
+  clearTimeout(lightStatusPushTimer);
+  lightStatusPushTimer = setTimeout(pushLightStatus, 1500);
+}
+
+function ensureLightStatusTimer() {
+  if (lightStatusTimer) return;
+  // Atualiza os chips mesmo sem eventos estruturais (fases mudam com o tempo).
+  lightStatusTimer = setInterval(pushLightStatus, 10_000);
+}
+
+function stopLightStatusTimer() {
+  clearInterval(lightStatusTimer);
+  lightStatusTimer = null;
+}
+
+// Recaptura do token Twitch: uma janela oculta por tentativa; rodadas sem resultado
+// ou com o token recusado esgotam em fallback (twitch da aba volta a webview).
+async function maybeCaptureTwitch(slot) {
+  const coordinator = captureCoordinator;
+  if (!coordinator) return;
+  if (!coordinator.shouldCapture(slot.id, {
+    hasCredential: twitchCredentialsBySlot.has(slot.id),
+    hasChannels: slot.twitchChannels.length > 0,
+  })) return;
+
+  coordinator.begin(slot.id);
+  pushLightStatus();
+  let ok = false;
+  try {
+    const cred = await captureViaHiddenWindow({
+      channel: slot.twitchChannels[0],
+      partition: `persist:slot-${slot.id}`,
+      deps: { BrowserWindow },
+      log: (message) => console.log(`[light] slot ${slot.id}: ${message}`),
+    });
+    if (cred) {
+      twitchCredentialsBySlot.set(slot.id, cred);
+      ok = true;
+      console.log(`[light] slot ${slot.id}: credencial twitch pronta (nick ${cred.nick})`);
+    } else {
+      console.log(`[light] slot ${slot.id}: captura sem resultado`);
+    }
+  } catch (error) {
+    console.error(`[light] slot ${slot.id}: erro na captura:`, error);
+  } finally {
+    coordinator.end(slot.id, { ok });
+  }
+  pushLightStatus();
+
+  if (twitchCredentialsBySlot.has(slot.id) && !coordinator.isFallback(slot.id)) {
+    // Credencial pronta: sobe o runner IRC autenticado.
+    syncLightMode().catch(() => {});
+  } else if (!coordinator.isFallback(slot.id)) {
+    await maybeCaptureTwitch(slot);
+  }
+}
+
+function syncLightMode() {
+  // Serializa: cada sincronização lê o estado quando começa a rodar — sem isso,
+  // duas chamadas concorrentes reconciliam estados velhos e derrubam runner vivo.
+  const run = lightSyncChain.then(() => runSyncLightMode());
+  lightSyncChain = run.catch(() => {});
+  return run;
+}
+
+async function runSyncLightMode() {
+  if (appIsQuitting) return;
+  const manager = lightModeEnabled() ? ensureLightManager() : lightManager;
+  if (!manager || !captureCoordinator) return;
+  if (!currentConfig.lightMode) {
+    manager.stopAll();
+    stopLightStatusTimer();
+    captureCoordinator.resetAll();
+    twitchCredentialsBySlot.clear();
+    return;
+  }
+  ensureLightStatusTimer();
+  const states = [];
+  for (const slot of currentConfig.slots) {
+    const kickCookie = await kickCookieFor(slot.id);
+    const hasCredentials = twitchCredentialsBySlot.has(slot.id);
+    const twitchFallback = captureCoordinator.isFallback(slot.id);
+    states.push({
+      slotId: slot.id,
+      kick: slot.kickChannels.map((login) => ({ login, cookie: kickCookie })),
+      // Sem credencial (ainda capturando) ou em fallback: twitch não roda headless —
+      // evita presença anônima inútil; fallback usa webview no renderer.
+      twitch: hasCredentials && !twitchFallback ? slot.twitchChannels : [],
+      twitchCredentials: twitchCredentialsBySlot.get(slot.id) ?? null,
+    });
+    if (slot.twitchChannels.length) {
+      maybeCaptureTwitch(slot).catch((error) => console.error('[light] captura:', error));
+    }
+  }
+  manager.reconcile(states);
+  pushLightStatus();
+}
+
+function lightModeEnabled() {
+  return currentConfig.lightMode === true;
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -322,6 +492,29 @@ function attachWebContentsGuards(mainWindow) {
     };
     contents.on('dom-ready', patchWebAuthn);
     contents.on('did-navigate', patchWebAuthn);
+    // Captura oportunista do token IRC: qualquer página da Twitch num webview de
+    // slot (painel, popout) autentica o chat sozinha — a escuta aproveita o
+    // handshake e alimenta o modo leve daquela aba. Uma escuta por webContents.
+    contents.on('dom-ready', () => {
+      if (!lightModeEnabled()) return;
+      if (contents.getType() !== 'webview') return;
+      if (!isTwitchHost(currentHostname(contents))) return;
+      if (ircCaptureAttached.has(contents)) return;
+      const slotId = slotIdFromContents(contents);
+      if (!slotId) return;
+      ircCaptureAttached.add(contents);
+      attachIrcCapture(contents, {
+        log: (message) => console.log(`[light] slot ${slotId}: ${message}`),
+        onCredentials: (cred) => {
+          const known = twitchCredentialsBySlot.get(slotId);
+          if (known?.token === cred.token) return;
+          twitchCredentialsBySlot.set(slotId, cred);
+          captureCoordinator?.reportExternalCredential(slotId);
+          console.log(`[light] slot ${slotId}: token IRC capturado de webview aberto (nick ${cred.nick})`);
+          syncLightMode().catch(() => {});
+        },
+      });
+    });
     contents.on('will-attach-webview', (_e, webPreferences, params) => {
       delete webPreferences.preload;
       webPreferences.nodeIntegration = false;
@@ -398,6 +591,7 @@ app.on('second-instance', () => showMainWindow());
 
 app.on('before-quit', () => {
   appIsQuitting = true;
+  try { lightManager?.stopAll(); } catch {}
 });
 
 app.on('window-all-closed', () => app.quit());

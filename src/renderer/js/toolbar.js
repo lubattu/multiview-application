@@ -7,12 +7,13 @@ function iconButton(text, title, onClick) {
   return b;
 }
 
-function streamButton({ icon, count, broken = [], panelOpen, title, onClick }) {
+function streamButton({ icon, count, broken = [], panelOpen, title, capturing = false, onClick }) {
   const lines = [panelOpen ? `Fechar painel da ${title}` : `Abrir painel da ${title} (login / escolher canal)`];
   if (count > 0) lines.push(`${title}: ${count} stream${count > 1 ? 's' : ''} em segundo plano`);
-  if (broken.length > 0) lines.push(`⚠ Sem resposta: ${broken.join(', ')} (religando automaticamente)`);
+  if (capturing) lines.push('Autenticando a sessão da Twitch automaticamente (aguarde alguns segundos)...');
+  if (broken.length > 0) lines.push(`⚠ Com falha: ${broken.join(', ')} (recuperando sozinho; se persistir, a aba volta ao modo normal)`);
   const b = iconButton(
-    panelOpen ? '📥' : `${icon} ${count}${broken.length > 0 ? ' ⚠' : ''}`,
+    panelOpen ? '📥' : `${icon} ${count}${broken.length > 0 ? ' ⚠' : ''}${capturing ? ' …' : ''}`,
     lines.join('\n'),
     onClick,
   );
@@ -90,11 +91,13 @@ export function renderChips(container, chips, handlers) {
       name,
       streamButton({
         icon: '📺', count: chip.twitchStreams, broken: chip.twitchBroken ?? [],
-        panelOpen: chip.twitchPanel, title: 'Twitch', onClick: () => handlers.onToggleTwitch(chip.id),
+        panelOpen: chip.twitchPanel, title: 'Twitch', capturing: chip.lightCapturing === true,
+        onClick: () => handlers.onToggleTwitch(chip.id),
       }),
       streamButton({
         icon: '🟩', count: chip.kickStreams, broken: chip.kickBroken ?? [],
-        panelOpen: chip.kickPanel, title: 'Kick', onClick: () => handlers.onToggleKick(chip.id),
+        panelOpen: chip.kickPanel, title: 'Kick',
+        onClick: () => handlers.onToggleKick(chip.id),
       }),
       iconButton(chip.muted ? '🔇' : '🔊', 'Som do jogo desta aba', () => handlers.onToggleMute(chip.id)),
       menuBtn,

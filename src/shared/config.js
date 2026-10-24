@@ -1,6 +1,20 @@
 export const GAME_URL = 'https://pokeidle.io';
 export const TWITCH_HOME_URL = 'https://www.twitch.tv/';
 export const KICK_HOME_URL = 'https://kick.com/';
+// Player de embed oficial do Kick (domínio próprio, sem chat nem UI do site).
+export const KICK_PLAYER_URL = 'https://player.kick.com/';
+
+// Player leve para streams em segundo plano: popout da Twitch e embed do Kick — sem
+// chat nem interface do site, que são a maior parte do custo de uma página inteira.
+// A página completa fica apenas para o painel visível.
+const STREAM_PLAYERS = {
+  twitch: (login) => `${TWITCH_HOME_URL}popout/${login}/player`,
+  kick: (login) => `${KICK_PLAYER_URL}${login}`,
+};
+
+export function streamPlayerUrl(platform, login) {
+  return STREAM_PLAYERS[platform]?.(login) ?? null;
+}
 
 export const LIMITS = Object.freeze({
   maxSlots: 4,
@@ -91,7 +105,9 @@ export function twitchLoginFromUrl(raw) {
   }
   const host = url.hostname.toLowerCase();
   if (host !== 'twitch.tv' && host !== 'www.twitch.tv' && host !== 'm.twitch.tv') return '';
-  const first = (url.pathname.split('/').filter(Boolean)[0] ?? '').toLowerCase();
+  const segments = url.pathname.split('/').filter(Boolean);
+  // Player de popout (/popout/<canal>/player): o canal é o segundo segmento.
+  const first = (segments[0] === 'popout' ? segments[1] ?? '' : segments[0] ?? '').toLowerCase();
   if (!first || TWITCH_RESERVED_PATHS.has(first)) return '';
   return normalizeTwitchChannel(first);
 }
@@ -104,7 +120,8 @@ export function kickLoginFromUrl(raw) {
     return '';
   }
   const host = url.hostname.toLowerCase();
-  if (host !== 'kick.com' && host !== 'www.kick.com') return '';
+  // player.kick.com: player de embed, o canal é o primeiro segmento do caminho.
+  if (host !== 'kick.com' && host !== 'www.kick.com' && host !== 'player.kick.com') return '';
   const first = (url.pathname.split('/').filter(Boolean)[0] ?? '').toLowerCase();
   if (!first || KICK_RESERVED_PATHS.has(first)) return '';
   return normalizeKickChannel(first);
@@ -119,6 +136,7 @@ export function defaultConfig() {
     closeToTray: 'streams',
     keepAwake: true,
     lowQuality: true,
+    lightMode: false,
     slots: [{ id: 1, name: 'Conta 1', zoom: 100, muted: false, twitchChannels: [], kickChannels: [] }],
     layout: { mode: 'grid', focusSlotId: 1, gridSplit: { v: 50, h: 50 }, focusSplit: 70 },
     window: { width: 1600, height: 900, maximized: false },
@@ -184,6 +202,8 @@ export function normalizeConfig(raw) {
     closeToTray: CLOSE_TRAY_OPTIONS.includes(raw.closeToTray) ? raw.closeToTray : 'streams',
     keepAwake: raw.keepAwake !== false,
     lowQuality: raw.lowQuality !== false,
+    // Opt-in: streams de segundo plano viram presença headless no processo main.
+    lightMode: raw.lightMode === true,
     slots,
     layout: {
       mode: layout.mode === 'focus' ? 'focus' : 'grid',

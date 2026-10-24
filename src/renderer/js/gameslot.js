@@ -5,6 +5,7 @@ import {
   LIMITS,
   isTwitchHost,
   isKickHost,
+  streamPlayerUrl,
   twitchLoginFromUrl,
   kickLoginFromUrl,
 } from '../../shared/config.js';
@@ -23,6 +24,10 @@ const PLATFORMS = {
 // marcada como problema (⚠ no chip) e uma nova rodada é agendada em 60 s.
 const STREAM_RELOAD_LIMIT = 3;
 const STREAM_RETRY_BACKOFF_MS = 60_000;
+
+// Na retomada, cada stream de fundo só começa a carregar depois da anterior: spawnar
+// todos os renderers de uma vez travava a inicialização para quem tem vários canais.
+const STREAM_BOOT_STAGGER_MS = 400;
 
 // Best-effort: abre as configurações do player, entra em "Qualidade" e escolhe a
 // opção mais baixa (menor número "NNNp"). Seletor por texto — se a Twitch/Kick
@@ -67,8 +72,13 @@ export class GameSlot {
     onStreamRemove = () => {},
     onStreamsCloseAll = () => {},
     onStreamShow = () => {},
+    // Modo leve POR plataforma: { twitch: bool, kick: bool }. No fallback da Twitch,
+    // só ela volta a webview — o Kick da mesma aba continua headless.
+    lightPlatforms = { twitch: false, kick: false },
   } = {}) {
     this.id = slot.id;
+    this.slot = slot;
+    this.lightPlatforms = { twitch: Boolean(lightPlatforms.twitch), kick: Boolean(lightPlatforms.kick) };
     this.zoomPct = slot.zoom;
     this.muted = slot.muted;
     this.onStateChange = onStateChange;
@@ -105,15 +115,26 @@ export class GameSlot {
     this.streamHeaderLabel = null;
     this.streamsBar = null;
     this.streams = { twitch: new Map(), kick: new Map() }; // login → webview, por plataforma
+    this.pendingStreams = new Set(); // "platform:login" agendados na retomada, ainda sem webview
+    this.bootQueue = [];
+    this.bootTimer = null;
     this.reloadAttempts = new WeakMap();
     this.broken = new Set(); // "platform:login" com crash persistente
     this.retryTimers = new WeakMap();
     this.lowQuality = true;
 
-    // Retomada no boot: partição persiste o login, então os canais voltam direto em segundo plano.
+    // Retomada no boot: partição persiste o login, então os canais voltam direto em
+    // segundo plano — criados em fila (STREAM_BOOT_STAGGER_MS entre cada um).
+    // Plataformas em modo leve não nascem com webview: a presença é do processo
+    // main (headless) e as pills são virtuais, alimentadas pelas listas da config.
     for (const platform of Object.keys(PLATFORMS)) {
-      for (const login of slot[`${platform}Channels`] ?? []) this.createStreamWebview(platform, login);
+      if (this.isLight(platform)) continue;
+      for (const login of slot[`${platform}Channels`] ?? []) {
+        this.pendingStreams.add(`${platform}:${login}`);
+        this.bootQueue.push({ platform, login });
+      }
     }
+    this.pumpBootQueue();
 
     this.webview.addEventListener('dom-ready', () => {
       this.webview.setZoomFactor(this.zoomPct / 100);
@@ -151,8 +172,18 @@ export class GameSlot {
     return Boolean(this.panelWebview) && (platform === null || this.panelPlatform === platform);
   }
 
+  // Modo leve da plataforma nesta aba (o fallback da Twitch pode desligá-la sozinho).
+  isLight(platform) {
+    return Boolean(this.lightPlatforms?.[platform]);
+  }
+
   hasStream(platform, login) {
-    return this.streams[platform]?.has(login) ?? false;
+    if (this.isLight(platform)) {
+      // Modo leve: a verdade é a lista persistida da aba (presença no main).
+      return (this.slot[`${platform}Channels`] ?? []).includes(login);
+    }
+    if (this.streams[platform]?.has(login)) return true;
+    return this.pendingStreams.has(`${platform}:${login}`);
   }
 
   // Streams de segundo plano com crash persistente (exibidas como ⚠ no chip).
@@ -194,6 +225,25 @@ export class GameSlot {
   // na Kick). Ela sai da lista de segundo plano enquanto estiver no painel; o botão
   // "Segundo plano" a devolve.
   openStreamInPanel(platform, login) {
+    if (this.isLight(platform)) {
+      // Sem webview escondido para trazer de volta: o painel nasce agora, com a
+      // página completa (chat/points visíveis). O main para a presença headless
+      // desse canal quando ele sai da lista da config.
+      if (!PLATFORMS[platform]) return;
+      if (this.panelWebview && this.panelPlatform !== platform) {
+        this.panelWebview.remove();
+        this.panelWebview = null;
+      }
+      this.panelPlatform = platform;
+      if (!this.panelWebview) {
+        this.createPanelWebview(platform, `${PLATFORMS[platform].home}${login}`);
+      } else {
+        this.navigateToFullChannel(login);
+      }
+      this.applyPanelState();
+      this.onStateChange();
+      return;
+    }
     const wv = this.streams[platform]?.get(login);
     if (!wv) return;
     if (this.panelWebview && this.panelWebview !== wv) this.panelWebview.remove();
@@ -204,6 +254,15 @@ export class GameSlot {
     this.panelWebview = wv;
     this.panelPlatform = platform;
     this.streamWrap.appendChild(wv);
+    this.updateStreamsBar();
+    // O fundo roda no player leve (sem chat nem pontos); visível, o canal volta à
+    // página completa. A recarga é aceitável aqui — é ação explícita do usuário — e a
+    // volta ao fundo compara a URL, não recarregando à toa.
+    try {
+      if ((wv.getURL() ?? '') !== `${PLATFORMS[platform].home}${login}`) wv.loadURL(`${PLATFORMS[platform].home}${login}`);
+    } catch {
+      wv.setAttribute('src', `${PLATFORMS[platform].home}${login}`);
+    }
     this.applyPanelState();
     this.onStateChange();
   }
@@ -216,6 +275,13 @@ export class GameSlot {
     const wv = this.panelWebview;
     this.panelWebview = null;
     this.panelPlatform = null;
+    if (this.isLight(platform)) {
+      // O webview do painel morre aqui; quem assume o segundo plano é a presença
+      // headless do main (a lista da config é atualizada pelo app.js).
+      wv.remove();
+      this.applyPanelState();
+      return { platform, login };
+    }
     // Move para fora do painel: vira stream escondida que continua tocando.
     wv.classList.add('hidden');
     this.root.appendChild(wv);
@@ -223,8 +289,9 @@ export class GameSlot {
       // Sem canal identificado (ou já assistido): o painel é descartado.
       wv.remove();
     } else {
-      // SPA não dispara novo load: aplica a qualidade mínima direto na conversão.
-      this.injectLowQuality(wv);
+      // O painel usava a página completa: navega ao player leve para o fundo não
+      // carregar chat/UI à toa. O did-finish-load do novo load aplica a qualidade mínima.
+      this.navigateToLightPlayer(wv, platform, login);
     }
     this.applyPanelState();
     return { platform, login };
@@ -292,16 +359,34 @@ export class GameSlot {
 
   // ── Streams em segundo plano ──────────────────────────────────────────────
 
+  // Consome a fila da retomada: cria a próxima stream e agenda a seguinte.
+  // Itens que o usuário fechou enquanto esperavam já saíram da fila.
+  pumpBootQueue() {
+    const next = this.bootQueue.shift();
+    if (!next) return;
+    this.pendingStreams.delete(`${next.platform}:${next.login}`);
+    try {
+      this.createStreamWebview(next.platform, next.login);
+    } catch {}
+    if (this.bootQueue.length > 0) {
+      this.bootTimer = setTimeout(() => this.pumpBootQueue(), STREAM_BOOT_STAGGER_MS);
+    }
+  }
+
   openStream(platform, login) {
+    // Modo leve: não nasce webview — a presença fica no main e a lista da config
+    // (atualizada pelo app.js) é o registro do segundo plano.
+    if (this.isLight(platform)) return true;
     return this.createStreamWebview(platform, login);
   }
 
   createStreamWebview(platform, login) {
     if (!PLATFORMS[platform]) return false;
-    if (this.streams[platform].has(login) || this.streams[platform].size >= LIMITS.maxStreams) return false;
+    if (this.streams[platform].has(login) || this.pendingStreams.has(`${platform}:${login}`) || this.streams[platform].size >= LIMITS.maxStreams) return false;
     const wv = document.createElement('webview');
     wv.className = 'webview-twitch hidden';
-    wv.setAttribute('src', `${PLATFORMS[platform].home}${login}`);
+    // Player leve (sem chat nem UI do site): a página completa só roda no painel visível.
+    wv.setAttribute('src', streamPlayerUrl(platform, login));
     wv.setAttribute('partition', `persist:slot-${this.id}`);
     wv.setAttribute('allowpopups', '');
     this.attachStreamListeners(wv);
@@ -326,6 +411,8 @@ export class GameSlot {
   }
 
   closeStream(platform, login) {
+    this.pendingStreams.delete(`${platform}:${login}`);
+    this.bootQueue = this.bootQueue.filter((e) => e.platform !== platform || e.login !== login);
     const wv = this.streams[platform]?.get(login);
     if (wv) {
       this.clearRetryTimer(wv);
@@ -337,6 +424,10 @@ export class GameSlot {
   }
 
   closeAllStreams(platform) {
+    for (const key of [...this.pendingStreams]) {
+      if (key.startsWith(`${platform}:`)) this.pendingStreams.delete(key);
+    }
+    this.bootQueue = this.bootQueue.filter((e) => e.platform !== platform);
     for (const wv of this.streams[platform]?.values() ?? []) {
       this.clearRetryTimer(wv);
       wv.remove();
@@ -351,8 +442,14 @@ export class GameSlot {
   updateStreamsBar() {
     if (!this.streamsBar) return;
     this.streamsBar.replaceChildren();
-    for (const [platform, map] of Object.entries(this.streams)) {
-      for (const login of map.keys()) {
+    // Por plataforma: modo leve → pills virtuais da lista persistida; normal →
+    // pills das streams (webviews) registradas.
+    const sources = Object.keys(PLATFORMS).map((platform) => [
+      platform,
+      this.isLight(platform) ? (this.slot[`${platform}Channels`] ?? []) : [...this.streams[platform]?.keys() ?? []],
+    ]);
+    for (const [platform, logins] of sources) {
+      for (const login of logins) {
         const pill = document.createElement('span');
         pill.className = 'twitch-stream-pill';
         const name = document.createElement('button');
@@ -372,7 +469,7 @@ export class GameSlot {
       const closeAll = document.createElement('button');
       closeAll.className = 'twitch-stream-close-all';
       closeAll.textContent = 'Fechar todas';
-      closeAll.title = 'Parar todas as streams em segundo plano desta aba';
+      closeAll.title = `Parar todas as streams em segundo plano desta aba`;
       closeAll.addEventListener('click', () => this.onStreamsCloseAll(this.id));
       this.streamsBar.appendChild(closeAll);
     }
@@ -399,6 +496,39 @@ export class GameSlot {
       if (wv === this.panelWebview) this.updateStreamHeaderLabel();
     });
     wv.addEventListener('render-process-gone', () => this.handleStreamCrash(wv));
+  }
+
+  // Navega ao player leve, a menos que o webview já esteja nele (stream trazida do
+  // fundo para o painel e devolvida de volta não deve recarregar à toa).
+  navigateToLightPlayer(wv, platform, login) {
+    const light = streamPlayerUrl(platform, login);
+    if (!light) return;
+    let current = '';
+    try {
+      current = wv.getURL() ?? '';
+    } catch {}
+    if (current === light) return;
+    try {
+      wv.loadURL(light);
+    } catch {
+      wv.setAttribute('src', light);
+    }
+  }
+
+  // No modo leve o painel nasce na página completa do canal; este helper só evita
+  // recarregar quando já estamos nela.
+  navigateToFullChannel(login) {
+    const target = `${PLATFORMS[this.panelPlatform].home}${login}`;
+    let current = '';
+    try {
+      current = this.panelWebview?.getURL() ?? '';
+    } catch {}
+    if (current === target) return;
+    try {
+      this.panelWebview.loadURL(target);
+    } catch {
+      this.panelWebview.setAttribute('src', target);
+    }
   }
 
   // Força a qualidade mais baixa nas streams escondidas (economia de CPU/GPU).
@@ -454,12 +584,16 @@ export class GameSlot {
       if (url?.startsWith('https://') && (isTwitchHost(host) || isKickHost(host))) return url;
     } catch {}
     const platform = wv.dataset.streamPlatform ?? (wv === this.panelWebview ? this.panelPlatform : null);
-    return platform && PLATFORMS[platform]
-      ? `${PLATFORMS[platform].home}${wv.dataset.streamLogin ?? ''}`
-      : null;
+    if (!platform || !PLATFORMS[platform]) return null;
+    const login = wv.dataset.streamLogin ?? '';
+    // Sem URL válida: stream de fundo religa no player leve; painel cai na home.
+    return login ? streamPlayerUrl(platform, login) : PLATFORMS[platform].home;
   }
 
   unmount() {
+    clearTimeout(this.bootTimer);
+    this.bootQueue = [];
+    this.pendingStreams.clear();
     this.webview.remove();
     if (this.panelWebview) this.clearRetryTimer(this.panelWebview);
     this.panelWebview?.remove();

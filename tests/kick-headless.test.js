@@ -7,6 +7,7 @@ import {
   pickLowestVariant,
   KickHeadlessRunner,
   curlTextFetcher,
+  curlCookieConfig,
   ACTIVE_WINDOW_MS,
 } from '../src/main/kick-headless.js';
 
@@ -363,6 +364,46 @@ describe('KickHeadlessRunner', () => {
 
   it('ACTIVE_WINDOW_MS cobre segmentos de 2s com folga', () => {
     expect(ACTIVE_WINDOW_MS).toBeGreaterThanOrEqual(10_000);
+  });
+});
+
+describe('curlCookieConfig', () => {
+  it('monta diretiva header do curl escapando barra e aspas', () => {
+    expect(curlCookieConfig('a=1; b=2')).toBe('header = "Cookie: a=1; b=2"\n');
+    expect(curlCookieConfig('v="x"')).toBe('header = "Cookie: v=\\"x\\""\n');
+    expect(curlCookieConfig('v\\g')).toBe('header = "Cookie: v\\\\g"\n');
+  });
+
+  it('rejeita cookie vazio ou com quebra de linha', () => {
+    expect(() => curlCookieConfig('')).toThrow(/ausente/);
+    expect(() => curlCookieConfig(null)).toThrow(/ausente/);
+    expect(() => curlCookieConfig('a=1\nheader = "header = \\"X: y\\""')).toThrow(/quebra de linha/);
+  });
+});
+
+describe('KickHeadlessRunner (cookie da sessão)', () => {
+  it('repasse o cookie ao apiFetcher na consulta da API', async () => {
+    const seen = [];
+    const apiFetcher = async (url, opts) => {
+      seen.push(opts.cookie);
+      return { status: 200, text: JSON.stringify({ playback_url: MASTER_URL, livestream: null }) };
+    };
+    const fetchImpl = async () => new Response('not found', { status: 404 });
+    const runner = new KickHeadlessRunner('testcanal', {
+      fetchImpl,
+      apiFetcher,
+      cookie: 'session_id=xyz; cf_clearance=abc',
+      pollMs: 5,
+      offlineMs: 5,
+      errorMs: 5,
+      resolveFailureMs: 5,
+    });
+    runner.start();
+    await waitFor(() => runner.snapshot().phase === 'offline');
+    expect(seen.length).toBeGreaterThanOrEqual(1);
+    expect(seen.every((c) => c === 'session_id=xyz; cf_clearance=abc')).toBe(true);
+    runner.stop();
+    await runner.waitStopped();
   });
 });
 

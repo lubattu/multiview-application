@@ -39,6 +39,20 @@ const BROWSER_HEADERS = {
 
 const CODE_MARKER = '\n__KICK_HTTP_CODE__:';
 
+// Linha de config do curl (--config -) que carrega o Cookie sem expô-lo em argv
+// (argv aparece em listagens de processo). Valor com quebra de linha é rejeitado:
+// quebraria a linha do arquivo de config e injetaria diretivas extras.
+export function curlCookieConfig(cookie) {
+  if (typeof cookie !== 'string' || !cookie) {
+    throw new Error('Cookie ausente');
+  }
+  if (/[\r\n]/.test(cookie)) {
+    throw new Error('Cookie com quebra de linha');
+  }
+  const escaped = cookie.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `header = "Cookie: ${escaped}"\n`;
+}
+
 function rememberSeen(set, url) {
   set.add(url);
   if (set.size > MAX_SEEN) {
@@ -55,7 +69,7 @@ function rememberSeen(set, url) {
 // o usa. Restrito a GET https sem redirect e com teto de tamanho; quando a integração
 // precisar anexar cookies de sessão, eles devem ir via `--config -` (stdin), nunca na
 // linha de comando. Retorna { status, text }; `signal` aborta matando o processo curl.
-export function curlTextFetcher(url, { timeoutMs = PLAYLIST_TIMEOUT_MS, maxBytes = MAX_PLAYLIST_BYTES, headers = {}, signal } = {}) {
+export function curlTextFetcher(url, { timeoutMs = PLAYLIST_TIMEOUT_MS, maxBytes = MAX_PLAYLIST_BYTES, headers = {}, cookie = null, signal } = {}) {
   return new Promise((resolve, reject) => {
     // Allowlist explícita: host da API + caminho de canal. Sem isso, uma URL de
     // outro host contendo "/api/v2/channels/" no caminho seria baixada via curl.
@@ -74,6 +88,7 @@ export function curlTextFetcher(url, { timeoutMs = PLAYLIST_TIMEOUT_MS, maxBytes
       reject(new Error('curlTextFetcher é apenas para a API do Kick'));
       return;
     }
+    const usesStdin = typeof cookie === 'string' && cookie.length > 0;
     const args = [
       '--silent', '--show-error',
       '--max-time', String(Math.max(1, Math.ceil(timeoutMs / 1000))),
@@ -84,6 +99,7 @@ export function curlTextFetcher(url, { timeoutMs = PLAYLIST_TIMEOUT_MS, maxBytes
       '--request', 'GET',
       '--write-out', CODE_MARKER + '%{http_code}',
     ];
+    if (usesStdin) args.push('--config', '-');
     for (const [key, value] of Object.entries(headers)) {
       // curl não sanitiza CRLF em argv: header dinâmico com quebra permitiria
       // injetar headers na requisição. Hoje só entra dicionário fixo, mas o
@@ -97,8 +113,21 @@ export function curlTextFetcher(url, { timeoutMs = PLAYLIST_TIMEOUT_MS, maxBytes
     args.push(url);
     const child = spawn(process.platform === 'win32' ? 'curl.exe' : 'curl', args, {
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [usesStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     });
+    if (usesStdin) {
+      // Cookie vai pelo arquivo de config na stdin, nunca na linha de comando.
+      // curl curto pode fechar a stdin antes do write: sem o handler de 'error',
+      // um EPIPE derrubaria o processo main.
+      child.stdin.on('error', () => {});
+      try {
+        child.stdin.end(curlCookieConfig(cookie));
+      } catch (error) {
+        child.kill();
+        reject(error);
+        return;
+      }
+    }
     if (signal) {
       if (signal.aborted) child.kill();
       else signal.addEventListener('abort', () => child.kill(), { once: true });
@@ -272,6 +301,7 @@ export class KickHeadlessRunner {
   constructor(slug, {
     fetchImpl = globalThis.fetch,
     apiFetcher = curlTextFetcher, // API do Kick via curl do sistema (Cloudflare)
+    cookie = null,        // cookies da sessão do slot (conta certa acumula pontos)
     pollMs = null,        // null = deriva do TARGETDURATION (mínimo 1 s)
     offlineMs = 30_000,
     errorMs = 5_000,
@@ -282,6 +312,7 @@ export class KickHeadlessRunner {
     this.slug = slug;
     this.fetchImpl = fetchImpl;
     this.apiFetcher = apiFetcher;
+    this.cookie = cookie;
     this.pollMs = pollMs;
     this.offlineMs = offlineMs;
     this.errorMs = errorMs;
@@ -432,6 +463,7 @@ export class KickHeadlessRunner {
             timeoutMs: PLAYLIST_TIMEOUT_MS,
             maxBytes: MAX_PLAYLIST_BYTES,
             headers: BROWSER_HEADERS,
+            cookie: this.cookie,
             signal: apiController.signal,
           });
         } finally {
