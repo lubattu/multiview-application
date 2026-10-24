@@ -1,7 +1,7 @@
 # PokeIdle Multiview
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/ryuuft/multiview-application?v=1.5.0)](../../releases)
+[![Release](https://img.shields.io/github/v/release/ryuuft/multiview-application?v=1.6.0)](../../releases)
 [![CI](https://github.com/ryuuft/multiview-application/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
 [English](README.md) | **Português (Brasil)**
@@ -13,6 +13,7 @@ Até **4 sessões isoladas do [pokeidle.io](https://pokeidle.io) em uma única j
 - **Até 4 slots** independentes, cada um com sessão própria e persistente (login permanece entre sessões).
 - **Modos de layout**: Grade (2×2 com splitters arrastáveis) e Foco (um slot em destaque).
 - **Twitch e Kick em segundo plano (multi-stream)**: cada aba pode assistir a **vários canais oficiais ao mesmo tempo**, escondidos e mudos, para somar o bônus de XP (+2,5% por stream adicional) — nas duas plataformas. A vinculação é feita pelo botão **Vincular Twitch/Kick** do jogo (autorização numa janela própria, na mesma sessão da aba, que se fecha sozinha ao concluir). Os links de canais oficiais dentro do jogo alimentam o segundo plano da aba sem abrir janelas extras — até **8 canais por plataforma em cada aba** (📺 Twitch / 🟩 Kick no chip). Ao reabrir o app, todas as streams retomam automaticamente.
+- **Modo leve (opcional, experimental)**: com ⚙ → "Modo leve", os canais de segundo plano deixam de ser players de vídeo escondidos e viram presenças headless invisíveis — os mesmos bônus por uma fração da CPU/RAM. A Kick é assistida pelo próprio feed HLS do canal (menor resolução, descartada sem decodificar; ~100 MB/h por canal de tráfego descartado). A Twitch é assistida por uma conexão de chat autenticada com a sessão vinculada de cada aba — o token é capturado automaticamente do login da Twitch da própria aba e nunca sai do app (só em memória). Se a sessão Twitch de uma aba não puder ser validada, ela volta sozinha aos players clássicos (o Kick continua leve). Pílulas e painéis funcionam igual; abrir um canal mostra a stream real para resgatar pontos.
 - **Fechar para a bandeja**: com streams ativas, o **×** esconde o app para a bandeja e o farm continua (dica na primeira vez). "Mostrar" e "Encerrar" ficam no ícone da bandeja, perto do relógio. Comportamento configurável em **⚙** (sempre / só com streams / nunca).
 - **PC acordado**: enquanto houver streams ativas, o app impede que o Windows suspenda (opcional em **⚙**).
 - **Qualidade mínima automática**: ao entrar em segundo plano, o app tenta selecionar a menor qualidade do player (menos CPU/GPU). Opcional em **⚙** — desligue se quiser controlar a qualidade manualmente.
@@ -29,10 +30,10 @@ Até **4 sessões isoladas do [pokeidle.io](https://pokeidle.io) em uma única j
 
 ## Como começar
 
-**Requisitos:** Windows 10/11 (x64). Não requer instalação.
+**Requisitos:** Windows 10/11 (x64).
 
-1. Baixe o `PokeIdleMultiview.exe` (portátil) na página de [Releases](../../releases).
-2. Execute o arquivo.
+1. Baixe o `PokeIdleMultiview.exe` (instalador) na página de [Releases](../../releases).
+2. Execute o arquivo e siga a instalação de um clique.
 3. Clique em **+ Slot** para abrir contas (até 4) e faça login em cada uma.
 
 ### Bônus de XP com streams em segundo plano
@@ -55,7 +56,7 @@ As preferências ficam em `%APPDATA%\PokeIdleMultiview\config.json` (gravação 
 
 - As páginas embutidas só podem navegar para `pokeidle.io` e `www.pokeidle.io`. Os painéis de stream ficam restritos a `twitch.tv` e `kick.com` (com `accounts.google.com` liberado durante o login) e ocupam o lugar do jogo na própria aba enquanto estiverem visíveis.
 - As webViews só recebem as permissões que pedirem, de uma lista permitida (câmera/microfone não estão entre elas).
-- O app varre os perfis de navegadores Chromium da máquina **apenas** para localizar a extensão /hunt já instalada. Nada é enviado para fora: o app não faz requisições próprias além das páginas que você abre.
+- O app varre os perfis de navegadores Chromium da máquina **apenas** para localizar a extensão /hunt já instalada. Nada é enviado para fora. Com o **modo leve desligado**, o app não faz requisições próprias além das páginas que você abre; com o **modo leve ligado**, ele conversa com endpoints da kick.com/twitch em nome dos canais que você configurou (presença para os bônus) usando a sessão de cada aba — as credenciais da Twitch ficam só em memória.
 - O WebAuthn é desligado só dentro das janelas deste app — seus navegadores não são alterados.
 - Limitação conhecida: janelas popup abertas de dentro das páginas embutidas não passam pelas mesmas restrições de navegação.
 

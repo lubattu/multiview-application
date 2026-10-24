@@ -10,6 +10,6 @@ win:
   icon: resources/icon.ico
   artifactName: PokeIdleMultiview.exe
   target:
-    - target: portable
+    - target: nsis
       arch:
         - x64

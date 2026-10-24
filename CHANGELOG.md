@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-24
+
+### Added
+
+- Light mode (optional, off by default): background Twitch/Kick channels stop being hidden video players and become headless presence connections in the main process — the same bonuses for a fraction of the CPU/RAM. Kick is watched via the channel's public HLS feed (lowest rendition downloaded and discarded without decoding, with the tab's session cookies attached so points accrue to the tab's account). Twitch is watched through one authenticated IRC connection per tab using each tab's own linked session; the token is captured automatically from the tab's own Twitch login, stays in memory only, and is never persisted or logged. Automatic fallback: if a tab's Twitch session can't be validated, that tab returns to the classic hidden players by itself (Kick stays light). Panels, pills and health indicators work the same way in both modes.
+
+### Changed
+
+- Kick background presence attaches the tab's own Kick session cookies to its requests; they are passed to system curl via stdin config, never on the command line.
+
 ## [1.5.0] - 2026-10-16
 
 ### Added

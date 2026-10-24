@@ -1,7 +1,7 @@
 # PokeIdle Multiview
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/ryuuft/multiview-application?v=1.5.0)](../../releases)
+[![Release](https://img.shields.io/github/v/release/ryuuft/multiview-application?v=1.6.0)](../../releases)
 [![CI](https://github.com/ryuuft/multiview-application/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
 **English** | [Português (Brasil)](README.pt-BR.md)
@@ -15,6 +15,7 @@ Run up to **4 isolated [pokeidle.io](https://pokeidle.io) sessions in a single w
 - **Up to 4 slots**, each one an isolated, persistent session (logins survive restarts).
 - **Layout modes**: Grid (2×2 with draggable splitters) and Focus (one slot highlighted).
 - **Twitch & Kick background streams (multi-stream)**: each tab can watch **several official channels at once**, hidden and muted, to stack the game's XP bonus (+2.5% per extra stream) — on both platforms. Linking is done through the game's own **Link Twitch/Kick** button (authorization opens in its own window, in the tab's session, and closes itself when done). Official channel links inside the game feed the tab's background without opening extra windows — up to **8 channels per platform per tab** (📺 Twitch / 🟩 Kick counters on the tab chip). All streams resume automatically when the app reopens.
+- **Light mode (optional, experimental)**: with ⚙ → "Modo leve", background channels stop being hidden video players and become invisible headless presence connections — the same bonuses for a fraction of the CPU/RAM. Kick is watched via the channel's own HLS feed (lowest rendition, discarded without decoding; ~100 MB/h per channel of discarded traffic). Twitch is watched through an authenticated chat connection using each tab's own linked session — the token is captured automatically from the tab's own Twitch login and never leaves the app (memory only). If a tab's Twitch session can't be validated, that tab automatically falls back to the classic hidden players (Kick stays light). Pills and panels work the same way; opening a channel shows the real stream so you can claim points.
 - **Close to tray**: with streams active, **×** hides the app to the tray and the farm keeps running (hint shown once). "Show" and "Quit" live on the tray icon. Configurable in **⚙** (always / streams only / never).
 - **Keep the PC awake**: while streams are active, the app prevents Windows from suspending (optional in **⚙**).
 - **Automatic lowest quality**: when a stream goes to the background, the app tries to pick the player's lowest quality (less CPU/GPU). Optional in **⚙**.
@@ -31,10 +32,10 @@ Run up to **4 isolated [pokeidle.io](https://pokeidle.io) sessions in a single w
 
 ## Getting started
 
-**Requirements:** Windows 10/11 (x64). No installer needed.
+**Requirements:** Windows 10/11 (x64).
 
-1. Download `PokeIdleMultiview.exe` (portable) from the [Releases](../../releases) page.
-2. Run it.
+1. Download `PokeIdleMultiview.exe` (installer) from the [Releases](../../releases) page.
+2. Run it and follow the one-click setup.
 3. Click **+ Slot** to open accounts (up to 4) and log in on each one.
 
 > Buttons referenced in this document keep their Portuguese labels as they appear in the app: **+ Slot** (add slot), **Vincular** (link), **Segundo plano** (background), **Auto-recarga** (auto-reload), **Fechar todas** (close all).
@@ -59,7 +60,7 @@ Preferences live in `%APPDATA%\PokeIdleMultiview\config.json` (atomic writes; th
 
 - Embedded pages can only navigate to `pokeidle.io` / `www.pokeidle.io`. Stream panels are restricted to `twitch.tv` and `kick.com` (with `accounts.google.com` allowed during login) and replace the game inside their own tab while visible.
 - WebViews only get the permissions they explicitly request from an allowlist (camera/microphone are not among them).
-- The app scans local Chromium browser profiles **only** to locate an already-installed /hunt extension. Nothing is uploaded anywhere: the app makes no network requests of its own beyond the pages you load.
+- The app scans local Chromium browser profiles **only** to locate an already-installed /hunt extension. Nothing is uploaded anywhere. With **light mode off**, the app makes no network requests of its own beyond the pages you load; with **light mode on**, the app itself talks to kick.com/twitch endpoints on behalf of the channels you configured (stream presence for the bonuses) using each tab's own session — Twitch credentials stay in memory only.
 - WebAuthn is disabled only inside this app's windows — your browsers are untouched.
 - Known limitation: popup windows opened from within the embedded pages are not subject to the same navigation restrictions.
 
@@ -75,7 +76,7 @@ Requirements: Node.js (with npm). Windows is needed to build the executable.
 npm install        # install dependencies (includes Electron)
 npm start          # run the app in development mode
 npm test           # run the test suite (vitest)
-npm run dist       # build the portable executable into release/
+npm run dist       # build the installer executable into release/
 ```
 
 Main structure:

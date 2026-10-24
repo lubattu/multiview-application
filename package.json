@@ -1,7 +1,7 @@
 {
   "name": "pokeidle-multiview",
   "productName": "PokeIdleMultiview",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "description": "Up to 4 isolated pokeidle.io sessions in a single Windows window",
   "author": "ryuuft",
