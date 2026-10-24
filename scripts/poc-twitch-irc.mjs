@@ -24,18 +24,25 @@ try {
 }
 const durationMs = Math.max(1, Number.parseInt(minutesArg ?? '30', 10) || 30) * 60_000;
 
-// Status público da Twitch (mesmo endpoint GQL que o player web usa, client-id público).
-// Erro de rede retorna null (tratado como "não sei": não espera, tenta conectar).
+// Status ao vivo direto do HTML da página do canal (mesma página que o navegador
+// abre; contém "isLiveBroadcast":true|false). Retorna:
+//   true/false — sinal presente na página;
+//   null       — não deu para determinar (rede, HTML sem o sinal): conecta mesmo assim.
+// (Uma versão anterior usava a GQL com client-id público; a Twitch passou a rejeitá-lo
+// e o parser tratava o erro como "offline" — checagem pouco confiável, substituída.)
 async function isTwitchLive(login) {
   try {
-    const response = await fetch('https://gql.twitch.tv/gql', {
-      method: 'POST',
-      headers: { 'Client-ID': 'kimne78kx3ncx6azgo4bwgp57', 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: `{ user(login: "${login}") { stream { id } } }` }),
-      signal: AbortSignal.timeout(10_000),
+    const response = await fetch(`https://www.twitch.tv/${login}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(15_000),
     });
-    const data = await response.json();
-    return Boolean(data?.data?.user?.stream);
+    if (!response.ok) return null;
+    const html = await response.text();
+    const signal = html.match(/"isLiveBroadcast":(true|false)/);
+    return signal ? signal[1] === 'true' : null;
   } catch {
     return null;
   }
