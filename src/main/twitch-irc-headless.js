@@ -31,6 +31,19 @@ export function normalizeChannelList(raw) {
   return normalized;
 }
 
+// Credenciais OPCIONAIS: sem elas, a conexão é anônima (justinfan). Com elas, o IRC
+// entra como a conta do usuário — necessário quando a presença anônima não credita
+// o bônus (caso observado na Twitch). O token é o auth-token do cookie twitch.tv
+// ("oauth:" é aceito e removido). NUNCA vai para log, snapshot ou erro.
+export function normalizeCredentials(raw) {
+  if (raw == null) return null;
+  const nick = normalizeTwitchChannel(String(raw.nick ?? ''));
+  const token = String(raw.token ?? '').replace(/^oauth:/i, '').trim();
+  if (!nick) throw new Error('Nick da Twitch ausente ou inválido');
+  if (!/^[A-Za-z0-9]{10,40}$/.test(token)) throw new Error('Token da Twitch ausente ou com formato inesperado');
+  return { nick, token };
+}
+
 function anonNick() {
   return `justinfan${Math.floor(10_000 + Math.random() * 89_999)}`;
 }
@@ -42,6 +55,7 @@ export class TwitchIrcRunner {
   // onopen/onmessage/onclose/onerror, send() e close() — trocável nos testes.
   constructor(channels, {
     socketFactory = (url) => new WebSocket(url),
+    credentials = null,
     nickFactory = anonNick, // injetável para testes determinísticos
     joinGapMs = JOIN_GAP_MS,
     reconnectMs = RECONNECT_MS,
@@ -49,6 +63,7 @@ export class TwitchIrcRunner {
   } = {}) {
     this.channels = normalizeChannelList(channels);
     this.socketFactory = socketFactory;
+    this.credentials = normalizeCredentials(credentials);
     this.nickFactory = nickFactory;
     this.joinGapMs = joinGapMs;
     this.reconnectMs = reconnectMs;
@@ -142,7 +157,8 @@ export class TwitchIrcRunner {
       }
       this.socket = socket;
       this.phase = 'connecting';
-      const nick = this.nickFactory();
+      // Autenticado entra com o próprio login; anônimo usa justinfan<aleatório>.
+      const nick = this.credentials ? this.credentials.nick : this.nickFactory();
       const joinedChannels = new Set();
       let settleGuard = false;
       const settle = (fn, value) => {
@@ -157,6 +173,8 @@ export class TwitchIrcRunner {
           return;
         }
         try {
+          // PASS vem obrigatoriamente antes do NICK no protocolo IRC.
+          if (this.credentials) socket.send(`PASS oauth:${this.credentials.token}\r\n`);
           socket.send(`NICK ${nick}\r\n`);
         } catch (error) {
           settle(reject, error);
@@ -179,6 +197,10 @@ export class TwitchIrcRunner {
             this.joinedCount = 0;
             joinedChannels.clear();
             this.joinAll(socket);
+            continue;
+          }
+          if (line.includes('Login authentication failed')) {
+            this.recordError('autenticação recusada pela Twitch (token inválido ou expirado)');
             continue;
           }
           // Confirmação do nosso JOIN: ":<nick>!... JOIN #canal". JOINs de outros

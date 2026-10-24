@@ -13,6 +13,9 @@ import { TwitchIrcRunner, normalizeChannelList } from '../src/main/twitch-irc-he
 const [channelsArg, minutesArg] = process.argv.slice(2);
 if (!channelsArg) {
   console.error('Uso: node scripts/poc-twitch-irc.mjs <canal[,canal2,...]> [minutos=30]');
+  console.error('Modo autenticado (recomendado para o teste de bônus): defina antes');
+  console.error('  $env:TWITCH_IRC_NICK  = seu login na Twitch (minúsculas)');
+  console.error('  $env:TWITCH_IRC_TOKEN = valor do cookie auth-token do twitch.tv');
   process.exit(2);
 }
 let channels;
@@ -23,6 +26,19 @@ try {
   process.exit(2);
 }
 const durationMs = Math.max(1, Number.parseInt(minutesArg ?? '30', 10) || 30) * 60_000;
+
+// Credenciais opcionais via ambiente (não via argv: linha de comando vaza em
+// listagens de processo). Nunca são impressas nem fazem parte do snapshot.
+const envNick = process.env.TWITCH_IRC_NICK ?? '';
+const envToken = process.env.TWITCH_IRC_TOKEN ?? '';
+let credentials = null;
+if (envNick || envToken) {
+  if (!envNick || !envToken) {
+    console.error('Defina TWITCH_IRC_NICK e TWITCH_IRC_TOKEN juntos (ou nenhum dos dois).');
+    process.exit(2);
+  }
+  credentials = { nick: envNick, token: envToken };
+}
 
 // Status ao vivo direto do HTML da página do canal (mesma página que o navegador
 // abre; contém "isLiveBroadcast":true|false). Retorna:
@@ -49,7 +65,9 @@ async function isTwitchLive(login) {
 }
 
 console.log(`[poc] canais: ${channels.join(', ')} — duração: ${Math.round(durationMs / 60_000)} min (após ao vivo)`);
-console.log('[poc] presença anônima por IRC (sem vídeo, sem login)');
+console.log(credentials
+  ? `[poc] modo AUTENTICADO como "${credentials.nick}" (token em memória, nunca impresso)`
+  : '[poc] presença ANÔNIMA por IRC (sem vídeo, sem login)');
 
 let interrupted = false;
 const onWaitInterrupt = () => { interrupted = true; };
@@ -84,6 +102,7 @@ async function waitForAnyLive() {
 await waitForAnyLive();
 
 const runner = new TwitchIrcRunner(channels, {
+  credentials,
   log: (message) => console.log(`[poc] ${message}`),
 });
 runner.start();

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   TwitchIrcRunner,
   normalizeChannelList,
+  normalizeCredentials,
   ACTIVE_WINDOW_MS,
 } from '../src/main/twitch-irc-headless.js';
 
@@ -56,6 +57,62 @@ describe('normalizeChannelList', () => {
     expect(() => normalizeChannelList(['canal com espaço'])).toThrow(/inválido/);
     expect(() => normalizeChannelList([])).toThrow(/Nenhum canal/);
     expect(() => normalizeChannelList('')).toThrow(/inválido/);
+  });
+});
+
+describe('normalizeCredentials', () => {
+  it('normaliza nick e remove prefixo oauth: do token', () => {
+    expect(normalizeCredentials({ nick: 'Guaxilol1', token: 'oauth:abc123def456ghi789' }))
+      .toEqual({ nick: 'guaxilol1', token: 'abc123def456ghi789' });
+  });
+
+  it('sem credenciais é null; faltando metade, rejeita', () => {
+    expect(normalizeCredentials(null)).toBeNull();
+    expect(() => normalizeCredentials({ nick: 'guaxilol1', token: '' })).toThrow(/Token/);
+    expect(() => normalizeCredentials({ nick: '', token: 'abc123def456ghi789' })).toThrow(/Nick/);
+  });
+
+  it('token com caractere estranho é rejeitado', () => {
+    expect(() => normalizeCredentials({ nick: 'guaxilol1', token: 'abc; rm -rf /' })).toThrow(/Token/);
+  });
+});
+
+describe('TwitchIrcRunner (autenticado)', () => {
+  it('envia PASS antes do NICK com o login real, sem justinfan', async () => {
+    const runner = new TwitchIrcRunner('guaxilol1', {
+      socketFactory: freshMockFactory(),
+      credentials: { nick: 'Guaxilol1', token: 'abc123def456ghi789' },
+      ...FAST,
+    });
+    runner.start();
+    await new Promise((r) => setTimeout(r, 10));
+    const socket = lastSocket();
+    socket.open();
+    expect(socket.sent[0]).toBe('PASS oauth:abc123def456ghi789\r\n');
+    expect(socket.sent[1]).toBe('NICK guaxilol1\r\n');
+    handshake(socket);
+    socket.emit(':guaxilol1!guaxilol1@guaxilol1.tmi.twitch.tv JOIN #guaxilol1\r\n');
+    expect(runner.snapshot().phase).toBe('joined');
+    // O token não vaza no snapshot nem no erro.
+    expect(JSON.stringify(runner.snapshot())).not.toContain('abc123def456');
+    runner.stop();
+    await runner.waitStopped();
+  });
+
+  it('avisa quando a Twitch recusa a autenticação', async () => {
+    const runner = new TwitchIrcRunner('guaxilol1', {
+      socketFactory: freshMockFactory(),
+      credentials: { nick: 'guaxilol1', token: 'tokeninvalido12345' },
+      ...FAST,
+    });
+    runner.start();
+    await new Promise((r) => setTimeout(r, 10));
+    const socket = lastSocket();
+    socket.open();
+    socket.emit(':tmi.twitch.tv NOTICE * :Login authentication failed\r\n');
+    expect(runner.snapshot().lastError).toMatch(/autenticação recusada/);
+    runner.stop();
+    await runner.waitStopped();
   });
 });
 
