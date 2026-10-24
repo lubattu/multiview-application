@@ -1,5 +1,7 @@
 // Harness do PoC de presença headless na Twitch via IRC: conecta no chat do(s)
-// canal(is) anônimo(s) por N minutos e imprime métricas periódicas.
+// canal(is) anônimo(s) e imprime métricas periódicas. Canal offline não rende bônus
+// nenhum, então antes de conectar o harness aguarda algum canal ficar ao vivo — a
+// duração pedida só começa a contar quando o IRC realmente entra no canal.
 // Uso: node scripts/poc-twitch-irc.mjs <canal[,canal2,...]> [minutos=30]
 //
 // Este script não faz parte do app; valida o conceito antes da integração. O
@@ -22,8 +24,57 @@ try {
 }
 const durationMs = Math.max(1, Number.parseInt(minutesArg ?? '30', 10) || 30) * 60_000;
 
-console.log(`[poc] canais: ${channels.join(', ')} — duração: ${Math.round(durationMs / 60_000)} min`);
+// Status público da Twitch (mesmo endpoint GQL que o player web usa, client-id público).
+// Erro de rede retorna null (tratado como "não sei": não espera, tenta conectar).
+async function isTwitchLive(login) {
+  try {
+    const response = await fetch('https://gql.twitch.tv/gql', {
+      method: 'POST',
+      headers: { 'Client-ID': 'kimne78kx3ncx6azgo4bwgp57', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: `{ user(login: "${login}") { stream { id } } }` }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = await response.json();
+    return Boolean(data?.data?.user?.stream);
+  } catch {
+    return null;
+  }
+}
+
+console.log(`[poc] canais: ${channels.join(', ')} — duração: ${Math.round(durationMs / 60_000)} min (após ao vivo)`);
 console.log('[poc] presença anônima por IRC (sem vídeo, sem login)');
+
+let interrupted = false;
+const onWaitInterrupt = () => { interrupted = true; };
+process.on('SIGINT', onWaitInterrupt);
+
+// Aguarda algum canal ficar ao vivo antes de conectar o IRC. Bônus só existe com
+// canal online — conectar antes seria tempo de teste jogado fora.
+async function waitForAnyLive() {
+  for (;;) {
+    const statuses = await Promise.all(channels.map(async (login) => [login, await isTwitchLive(login)]));
+    const live = statuses.filter(([, isLive]) => isLive === true).map(([login]) => login);
+    if (live.length > 0) {
+      console.log(`[poc] ao vivo agora: ${live.join(', ')} — conectando o IRC`);
+      return;
+    }
+    const unknown = statuses.filter(([, isLive]) => isLive === null).map(([login]) => login);
+    if (unknown.length === channels.length) {
+      console.log('[poc] não consegui consultar o status dos canais (rede?); vou conectar mesmo assim');
+      return;
+    }
+    console.log(`[poc] todos offline (${new Date().toLocaleTimeString()}); verificando de novo em 60 s... (Ctrl+C encerra)`);
+    for (let waited = 0; waited < 60_000 && !interrupted; waited += 1000) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    if (interrupted) {
+      console.log('[poc] encerrado enquanto aguardava canal ao vivo');
+      process.exit(0);
+    }
+  }
+}
+
+await waitForAnyLive();
 
 const runner = new TwitchIrcRunner(channels, {
   log: (message) => console.log(`[poc] ${message}`),
@@ -67,6 +118,7 @@ const finish = async (reason) => {
 };
 
 const timer = setTimeout(() => finish('tempo esgotado'), durationMs);
+process.removeListener('SIGINT', onWaitInterrupt);
 process.on('SIGINT', () => {
   clearTimeout(timer);
   finish('Ctrl+C');
