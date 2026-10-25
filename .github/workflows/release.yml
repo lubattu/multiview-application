@@ -18,7 +18,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - run: npm run dist
+      # --publish never: quem anexa o exe ao release é o passo seguinte
+      # (softprops/action-gh-release). Sem isso o electron-builder tenta publicar
+      # sozinho em build de tag e falha por falta de GH_TOKEN.
+      - run: npx electron-builder --win --publish never
       - name: Attach executable to the release
         uses: softprops/action-gh-release@v3
         with:
